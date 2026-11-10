@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from data_schemas import ProductRequest, ProductResponse
+from sqlalchemy import select
 from models import Product, SessionLocal
 
 app = FastAPI()
 
+session = SessionLocal()
 
 @app.get("/")
 def home():
@@ -33,3 +35,9 @@ def create_product(prod: ProductRequest):
         )
     finally:
         db.close()
+
+@app.get("/products", response_model=list[ProductResponse])
+def get_products():
+    query = select(Product)
+    products = session.scalars(query)
+    return products
