@@ -1,14 +1,17 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from data_schemas import (
     ProductRequest, ProductResponse,
     PurchaseRequest, PurchaseResponse,
     SaleRequest, SaleResponse,
     SaleDetailRequest, SaleDetailResponse,
-    PaymentRequest, PaymentResponse,
+    PaymentRequest, PaymentResponse,LoginRequest,LoginResponse,
+    RegisterRequest,RegisterResponse,STKPushRequest
 )
 from models import Base, Product, Purchase, Sale, Sale_detail, Payment, User
 from sqlalchemy import create_engine,select
 from sqlalchemy.orm import Session
+from myjwt import verify_password, get_password_hash, create_access_token
+from fastapi import status
 
 app = FastAPI()
 
@@ -18,22 +21,49 @@ Base.metadata.create_all(engine)
 
 session = Session(engine)
 
-# def add_user():
-#     user = User(
-#         full_name = "loreen ruth",
-#         email = "loreen@gmail.com",
-#         password = "1234",
-#         phone_number = "0734678865"
-#         )
-    
-#     session.add(user)
-#     session.commit()
-
-# add_user()
-
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
+
+# AUTHENTICATION ROUTES
+@app.post("/login", response_model=LoginRequest)
+def login(user:LoginRequest):
+    credentials_exception = HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    query = select(User).where(User.email == user.email)
+    db_user = session.scalars(query).first()
+
+    if not db_user:
+        raise credentials_exception
+    
+    if not verify_password(user.password, user.hashed_password):
+        raise credentials_exception
+
+    access_token = create_access_token(data={"sub": db_user.email})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/register", response_model=RegisterResponse)
+def register(user: RegisterRequest):
+    # check if the email is already taken
+    query = select(User).where(User.email == user.email)
+    existing_user = session.scalars(query).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # store in the database, with the password hashed
+    dbuser = User(
+        full_name=user.full_name,
+        email=user.email,
+        password=get_password_hash(user.password),
+    )
+    session.add(dbuser)
+    session.commit()
+    return dbuser
+
 
 @app.post("/products", response_model=ProductResponse)
 def create_product(prod: ProductRequest):
@@ -199,3 +229,44 @@ def update_payment(payment_id: int, payment: PaymentRequest):
 
     session.commit()
     return dbpayment
+
+@app.post("/payments/stk-push", response_model=PaymentResponse)
+def create_stk_push(req: STKPushRequest):
+    phone = format_phone(req.phone_number)
+    result = stk_push(phone, req.amount, f"Sale{req.sale_id}", "Duka payment")
+
+    if result.get("ResponseCode") != "0":
+        raise HTTPException(status_code=400, detail=result)
+
+    dbpayment = Payment(
+        sale_id=req.sale_id,
+        amount=req.amount,
+        mrid=result["MerchantRequestID"],
+        crid=result["CheckoutRequestID"],
+        phone_number=phone,
+        status="pending",
+    )
+    session.add(dbpayment)
+    session.commit()
+    return dbpayment
+
+
+@app.post("/payments/callback")
+async def mpesa_callback(request: Request):
+    data = await request.json()
+    callback = data["Body"]["stkCallback"]
+
+    query = select(Payment).where(Payment.crid == callback["CheckoutRequestID"])
+    dbpayment = session.scalars(query).first()
+
+    if dbpayment:
+        if callback["ResultCode"] == 0:
+            for item in callback["CallbackMetadata"]["Item"]:
+                if item["Name"] == "MpesaReceiptNumber":
+                    dbpayment.transaction_code = item["Value"]
+            dbpayment.status = "success"
+        else:
+            dbpayment.status = "failed"
+        session.commit()
+
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}

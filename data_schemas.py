@@ -2,6 +2,31 @@ from pydantic import BaseModel
 from datetime import date, datetime
 from typing import Optional
 
+class RegisterRequest(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    phone_number: str
+
+class RegisterResponse(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    password: str
+    phone_number: str
+    token: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class LoginResponse(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    phone_number: str
+    token: str
+
 class ProductRequest(BaseModel) :
     product_name : str
     buying_price : float
@@ -67,3 +92,8 @@ class PaymentResponse(BaseModel):
     status : str
     created_at : datetime
     updated_at : datetime
+
+class STKPushRequest(BaseModel):
+    sale_id : int
+    amount : float
+    phone_number : str    
